@@ -6,6 +6,7 @@
 # See CONTRIBUTORS for full list of authors.
 
 import json
+import re
 
 from cps import logger, db
 from cps.search_metadata import cl as metadata_providers
@@ -14,6 +15,25 @@ sys.path.insert(1, '/app/calibre-web-automated/scripts/')
 from cwa_db import CWA_DB
 
 log = logger.create()
+
+SERIES_SUFFIX_PATTERN = re.compile(
+    r"^(?P<title>.+?)\s*\((?P<series>[^()]+?)(?:,\s*(?:Book\s+)?|\s+Book\s+|\s*#)(?P<index>\d+(?:\.\d+)?)\)$",
+    re.IGNORECASE)
+
+
+def strip_series_suffix(title):
+    """Split an Amazon-style series suffix off a title, e.g. Foo (Bar, 1) -> (Foo, Bar, 1)"""
+    if not title:
+        return title, None, None
+    m = SERIES_SUFFIX_PATTERN.match(title.strip())
+    if not m:
+        return title, None, None
+    clean = m.group("title").strip()
+    series = m.group("series").strip()
+    if not clean or not series or series.isdigit():
+        return title, None, None
+    return clean, series, m.group("index")
+
 
 def fetch_and_apply_metadata(book_id: int, user_enabled: bool = False) -> bool:
     """
@@ -133,14 +153,19 @@ def _apply_metadata_to_book(book, metadata, calibre_db_instance) -> bool:
         updated = False
         
         # Update title - only if enabled in settings
-        if (cwa_settings.get('auto_metadata_update_title', True) and 
+        if (cwa_settings.get('auto_metadata_update_title', True) and
             metadata.title and metadata.title.strip()):
+            incoming_title, _, _ = strip_series_suffix(metadata.title.strip())
+            current_title, _, _ = strip_series_suffix(book.title.strip())
             if use_smart_application:
-                if len(metadata.title.strip()) > len(book.title.strip()):
-                    book.title = metadata.title.strip()
+                if len(incoming_title) > len(current_title):
+                    book.title = incoming_title
+                    updated = True
+                elif book.title.strip() != current_title:
+                    book.title = current_title
                     updated = True
             else:
-                book.title = metadata.title.strip()
+                book.title = incoming_title
                 updated = True
             
         # Update authors - only if enabled in settings
